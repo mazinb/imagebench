@@ -31,7 +31,18 @@ def _hw() -> dict:
 
 def cmd_prompts(args: argparse.Namespace) -> int:
     dest = Path(args.out or ".")
-    written = write_prompts(dest / "prompts" if dest.name != "prompts" else dest, suite=args.suite)
+    
+    # Validate destination path
+    try:
+        dest_resolved = dest.resolve()
+        # Ensure destination is under current working directory
+        cwd = Path.cwd().resolve()
+        if not str(dest_resolved).startswith(str(cwd)):
+            raise SystemExit(f"Destination must be under current working directory: {dest}")
+    except (ValueError, OSError) as e:
+        raise SystemExit(f"Invalid destination path: {e}")
+    
+    written = write_prompts(dest_resolved / "prompts" if dest_resolved.name != "prompts" else dest_resolved, suite=args.suite)
     for p in written:
         print(p)
     return 0
@@ -40,15 +51,35 @@ def cmd_prompts(args: argparse.Namespace) -> int:
 def cmd_run(args: argparse.Namespace) -> int:
     suite = args.suite
     prompts = load_prompts(suite)
+    
+    # Validate run_id to prevent path traversal
     run_id = args.run_id or new_run_id()
+    if "/" in run_id or "\\" in run_id or ".." in run_id:
+        raise SystemExit(f"Invalid run_id: {run_id}")
+    
     out_root = Path(args.out or "results") / run_id
-    img_dir = out_root / "images"
+    
+    # Validate output directory is safe
+    try:
+        out_root_resolved = out_root.resolve()
+        # Ensure it's under current working directory or results directory
+        cwd = Path.cwd().resolve()
+        if not (str(out_root_resolved).startswith(str(cwd))):
+            raise SystemExit(f"Output directory must be under current working directory: {out_root}")
+    except (ValueError, OSError) as e:
+        raise SystemExit(f"Invalid output path: {e}")
+    
+    img_dir = out_root_resolved / "images"
     img_dir.mkdir(parents=True, exist_ok=True)
     model_id = args.model or "custom"
     rows = []
     print(f"[imagebench] suite={suite} prompts={len(prompts)} → {out_root}")
     for i, prompt in enumerate(prompts, 1):
-        dest = img_dir / f"{prompt['id']}.png"
+        # Sanitize prompt ID for filename
+        prompt_id = str(prompt.get("id", f"prompt_{i}"))
+        # Remove any path separators or dangerous characters
+        safe_id = "".join(c if c.isalnum() or c in "-_" else "_" for c in prompt_id)[:100]
+        dest = img_dir / f"{safe_id}.png"
         print(f"[{i}/{len(prompts)}] {prompt['id']} {prompt.get('category')}", flush=True)
         if args.adapter == "openai":
             meta = generate_openai(
@@ -87,45 +118,114 @@ def cmd_run(args: argparse.Namespace) -> int:
         "hardware": _hw(),
         "prompts": rows,
     }
-    save_result(out_root / "results.json", result)
+    save_result(out_root_resolved / "results.json", result)
     print(report_summary(result))
-    print(f"wrote {out_root / 'results.json'}")
+    print(f"wrote {out_root_resolved / 'results.json'}")
     return 0
 
 
 def cmd_score(args: argparse.Namespace) -> int:
     root = Path(args.run)
-    path = root / "results.json" if root.is_dir() else root
-    result = json.loads(path.read_text())
+    
+    # Validate path
+    try:
+        root_resolved = root.resolve()
+    except (ValueError, OSError) as e:
+        raise SystemExit(f"Invalid run path: {e}")
+    
+    path = root_resolved / "results.json" if root_resolved.is_dir() else root_resolved
+    
+    if not path.is_file():
+        raise SystemExit(f"Results file not found: {path}")
+    
+    # Validate file size (max 50MB)
+    if path.stat().st_size > 50 * 1024 * 1024:
+        raise SystemExit(f"Results file too large: {path}")
+    
+    try:
+        result = json.loads(path.read_text(encoding='utf-8'))
+    except json.JSONDecodeError as e:
+        raise SystemExit(f"Invalid JSON in results file: {e}")
+    
+    if not isinstance(result, dict):
+        raise SystemExit("Results file must contain a JSON object")
+    
     by_id = {p["id"]: p for p in load_prompts(result.get("suite") or "all")}
     img_root = path.parent
-    for row in result["prompts"]:
+    
+    prompts_list = result.get("prompts", [])
+    if not isinstance(prompts_list, list):
+        raise SystemExit("Results 'prompts' field must be a list")
+    
+    for row in prompts_list:
+        if not isinstance(row, dict):
+            continue
         if row.get("pass") is not None and not args.force:
             continue
-        prompt = by_id.get(row["id"])
+        prompt = by_id.get(row.get("id"))
         if not prompt:
             continue
-        image = img_root / row.get("image", f"images/{row['id']}.png")
-        if not image.is_file():
-            print(f"skip {row['id']}: missing {image}")
+        image_rel = row.get("image", f"images/{row.get('id', 'unknown')}.png")
+        # Validate image path to prevent path traversal
+        if ".." in str(image_rel) or image_rel.startswith("/"):
+            print(f"skip {row.get('id')}: unsafe image path {image_rel}")
             continue
-        print(f"score {row['id']}", flush=True)
-        scored = score_openai_vlm(
-            prompt,
-            image,
-            base_url=args.base_url,
-            model=args.judge_model,
-        )
-        row.update(scored)
-        save_result(path, result)
+        image = img_root / image_rel
+        try:
+            image_resolved = image.resolve()
+            # Ensure image is under img_root
+            if not str(image_resolved).startswith(str(img_root.resolve())):
+                print(f"skip {row.get('id')}: image path outside results directory")
+                continue
+        except (ValueError, OSError):
+            print(f"skip {row.get('id')}: invalid image path")
+            continue
+        if not image_resolved.is_file():
+            print(f"skip {row.get('id')}: missing {image}")
+            continue
+        print(f"score {row.get('id')}", flush=True)
+        try:
+            scored = score_openai_vlm(
+                prompt,
+                image_resolved,
+                base_url=args.base_url,
+                model=args.judge_model,
+            )
+            row.update(scored)
+            save_result(path, result)
+        except Exception as e:
+            print(f"error scoring {row.get('id')}: {e}")
+            continue
     print(report_summary(result))
     return 0
 
 
 def cmd_report(args: argparse.Namespace) -> int:
     root = Path(args.run)
-    path = root / "results.json" if root.is_dir() else root
-    result = json.loads(path.read_text())
+    
+    # Validate path
+    try:
+        root_resolved = root.resolve()
+    except (ValueError, OSError) as e:
+        raise SystemExit(f"Invalid run path: {e}")
+    
+    path = root_resolved / "results.json" if root_resolved.is_dir() else root_resolved
+    
+    if not path.is_file():
+        raise SystemExit(f"Results file not found: {path}")
+    
+    # Validate file size (max 50MB)
+    if path.stat().st_size > 50 * 1024 * 1024:
+        raise SystemExit(f"Results file too large: {path}")
+    
+    try:
+        result = json.loads(path.read_text(encoding='utf-8'))
+    except json.JSONDecodeError as e:
+        raise SystemExit(f"Invalid JSON in results file: {e}")
+    
+    if not isinstance(result, dict):
+        raise SystemExit("Results file must contain a JSON object")
+    
     print(report_summary(result))
     return 0
 
