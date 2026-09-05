@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "imagebench"
+version = "0.1.0"
+description = "50-prompt on-device text-to-image pass/fail benchmark"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "mazinb" }]
+dependencies = [
+  "requests>=2.31",
+]
+
+[project.optional-dependencies]
+openai = ["openai>=1.40"]
+
+[project.scripts]
+imagebench = "imagebench.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+imagebench = ["data/*.jsonl"]

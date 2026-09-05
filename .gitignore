@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+results/
+.DS_Store
+.env
+.env.*
+*.png
+*.jpg
+*.jpeg
+*.safetensors
+.ruff_cache/
+.pytest_cache/

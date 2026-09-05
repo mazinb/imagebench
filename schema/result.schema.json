@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mazinb/imagebench/schema/result.schema.json",
+  "title": "ImageBench result",
+  "type": "object",
+  "required": ["schema", "run_id", "suite", "model", "hardware", "prompts"],
+  "properties": {
+    "schema": { "const": "imagebench/v1" },
+    "run_id": { "type": "string" },
+    "suite": { "enum": ["core", "adult", "all"] },
+    "model": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "precision": { "type": "string" },
+        "steps": { "type": ["number", "null"] },
+        "cfg": { "type": ["number", "null"] },
+        "backend": { "type": "string" },
+        "seed": { "type": ["integer", "null"] }
+      }
+    },
+    "hardware": {
+      "type": "object",
+      "properties": {
+        "gpu": { "type": "string" },
+        "vram_gib": { "type": ["number", "null"] },
+        "ram_gib": { "type": ["number", "null"] },
+        "unified_memory": { "type": "boolean" },
+        "os": { "type": "string" }
+      }
+    },
+    "prompts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": { "type": "string" },
+          "pass": { "type": ["boolean", "null"] },
+          "score": { "type": ["number", "null"] },
+          "verdict": { "type": ["string", "null"] },
+          "gen_seconds": { "type": ["number", "null"] },
+          "peak_vram_gib": { "type": ["number", "null"] },
+          "peak_ram_gib": { "type": ["number", "null"] },
+          "image": { "type": "string" }
+        }
+      }
+    }
+  }
+}
